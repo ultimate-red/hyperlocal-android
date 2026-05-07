@@ -16,6 +16,9 @@ from widgets import FilterChips, TaskCard, TopBar
 from theme import BG, PRIMARY, TXT2, WHITE
 
 
+_POLL_FALLBACK_SECONDS = 15
+
+
 class MyTasksScreen(Screen):
     def __init__(self, **kw):
         kw.setdefault("name", "my_tasks")
@@ -24,6 +27,7 @@ class MyTasksScreen(Screen):
         self._tasks = []
         self._filter = "all"
         self._ind_colors = {}
+        self._poll_event = None
         self._build()
 
     def _build(self):
@@ -38,7 +42,10 @@ class MyTasksScreen(Screen):
             size=lambda i, v: setattr(self._rbg, "size", v),
         )
 
-        main.add_widget(TopBar(title="My Tasks"))
+        main.add_widget(TopBar(
+            title="My Tasks",
+            on_bell=lambda: self._go_notifications(),
+        ))
 
         # Sub-tabs
         tab_area = BoxLayout(
@@ -151,11 +158,24 @@ class MyTasksScreen(Screen):
                 btn.bold = False
                 self._ind_colors[key].rgba = (0, 0, 0, 0)
 
+    def on_pre_enter(self):
+        self._grid.clear_widgets()
+        self._status.text = "Loading…"
+        self._status.opacity = 1
+
     def on_enter(self):
         self._refresh_tabs()
         self._fab.opacity = 1 if self._active_tab == "posted" else 0
         self._fab.disabled = self._active_tab != "posted"
         self._load()
+        self._poll_event = Clock.schedule_interval(
+            lambda dt: self._bg_refresh(), _POLL_FALLBACK_SECONDS
+        )
+
+    def on_leave(self):
+        if self._poll_event:
+            self._poll_event.cancel()
+            self._poll_event = None
 
     def _load(self):
         self._status.text = "Loading…"
@@ -168,11 +188,28 @@ class MyTasksScreen(Screen):
         self._tasks = tasks
         self._render_filtered()
 
+    def _bg_refresh(self):
+        path = "/tasks/mine/posted" if self._active_tab == "posted" else "/tasks/mine/taken"
+        api("GET", path, on_success=self._bg_show, on_error=None)
+
+    def _bg_show(self, tasks):
+        if self._tasks_changed(tasks):
+            self._tasks = tasks
+            self._render_filtered(animate=False)
+
+    def _tasks_changed(self, new_tasks):
+        if len(new_tasks) != len(self._tasks):
+            return True
+        for old, new in zip(self._tasks, new_tasks):
+            if old.get("id") != new.get("id") or old.get("status") != new.get("status"):
+                return True
+        return False
+
     def _apply_filter(self, key):
         self._filter = key
         self._render_filtered()
 
-    def _render_filtered(self):
+    def _render_filtered(self, animate=True):
         self._grid.clear_widgets()
         filtered = (
             self._tasks if self._filter == "all"
@@ -185,16 +222,23 @@ class MyTasksScreen(Screen):
         self._status.opacity = 0
         for i, task in enumerate(filtered):
             card = TaskCard(task=task, active_tab=self._active_tab)
-            card.opacity = 0
+            if animate:
+                card.opacity = 0
             card.bind(on_press=lambda *_, t=task: self._go_detail(t["id"]))
             self._grid.add_widget(card)
-            Clock.schedule_once(
-                lambda dt, c=card: Animation(opacity=1, duration=0.25, t='out_quad').start(c),
-                i * 0.05,
-            )
+            if animate:
+                Clock.schedule_once(
+                    lambda dt, c=card: Animation(opacity=1, duration=0.25, t='out_quad').start(c),
+                    i * 0.05,
+                )
 
     def _on_err(self, error):
         self._status.text = f"Error: {error}"
+
+    def _go_notifications(self):
+        notif_screen = self.manager.get_screen("notifications")
+        notif_screen._from_screen = "my_tasks"
+        self.manager.current = "notifications"
 
     def _go_detail(self, task_id):
         if self.manager.current != "my_tasks":

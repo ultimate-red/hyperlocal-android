@@ -30,46 +30,20 @@ def clear_auth():
 
 
 def register_fcm_token(token):
-    print(f"DEBUG: register_fcm_token called with token: {token[:20]}...")
+    logger.info(f"→ Registering FCM token: {token[:20]}...")
     def _success(result):
-        print("DEBUG: FCM token registration success")
-        logger.info(f"✓ FCM token registered successfully: {token[:20]}...")
-        def show_msg():
-            try:
-                from kivy.uix.toast import toast
-            except ImportError:
-                try:
-                    from kivy.toast import toast
-                except ImportError:
-                    from kivy.uix.popup import Popup
-                    from kivy.uix.label import Label
-                    popup = Popup(title="FCM Registered", content=Label(text="FCM token registered!"), size_hint=(0.8, 0.4))
-                    popup.open()
-                    return
-            toast("FCM token registered!")
-        show_msg()
-    
+        logger.info(f"✓ FCM token registered: {token[:20]}...")
     def _error(error):
-        print(f"DEBUG: FCM token registration error: {error}")
         logger.error(f"✗ Failed to register FCM token: {error}")
-        def show_msg():
-            try:
-                from kivy.uix.toast import toast
-            except ImportError:
-                try:
-                    from kivy.toast import toast
-                except ImportError:
-                    from kivy.uix.popup import Popup
-                    from kivy.uix.label import Label
-                    popup = Popup(title="FCM Registration Failed", content=Label(text=f"FCM registration failed: {error[:30]}"), size_hint=(0.8, 0.4))
-                    popup.open()
-                    return
-            toast(f"FCM registration failed: {error[:30]}")
-        show_msg()
-    
-    print("DEBUG: Making API call to register FCM token")
-    logger.info(f"→ Registering FCM token with backend: {token[:20]}...")
     api("PUT", "/users/me/fcm-token", body={"token": token}, on_success=_success, on_error=_error)
+
+
+def send_app_log(level, message, screen=None):
+    """Send an error/warning log to the backend. Silent — never shows UI."""
+    body = {"level": level, "message": message}
+    if screen:
+        body["screen"] = screen
+    api("POST", "/app-logs", body=body, on_success=None, on_error=None)
 
 
 # ── API helper ────────────────────────────────────────────────────────────────
@@ -84,26 +58,36 @@ def api(method, path, body=None, on_success=None, on_error=None, auth=True):
 
     req_body = json.dumps(body).encode("utf-8") if body else None
 
+    def _log_error(msg):
+        # Skip logging errors from the log endpoint itself to avoid loops
+        if path != "/app-logs":
+            send_app_log("error", f"{method} {path} — {msg}")
+
     def _ok(req, result):
         if on_success:
             on_success(result)
 
     def _err(req, error):
+        msg = str(error)
+        _log_error(msg)
         if on_error:
-            on_error(str(error))
+            on_error(msg)
 
     def _fail(req, result):
+        msg = (
+            result.get("detail", str(result))
+            if isinstance(result, dict)
+            else str(result)
+        )
+        _log_error(msg)
         if on_error:
-            msg = (
-                result.get("detail", str(result))
-                if isinstance(result, dict)
-                else str(result)
-            )
             on_error(msg)
 
     def _cancel(_):
+        msg = "Request timed out. Is the backend running?"
+        _log_error(msg)
         if on_error:
-            on_error("Request timed out. Is the backend running?")
+            on_error(msg)
 
     UrlRequest(
         url,

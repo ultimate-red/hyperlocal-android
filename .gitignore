@@ -1,0 +1,8 @@
+.buildozer/
+bin/
+__pycache__/
+*.pyc
+*.pyo
+env/
+env2/
+hyperlocal_auth.json

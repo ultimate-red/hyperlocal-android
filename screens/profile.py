@@ -8,8 +8,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 
 from api import api, clear_auth
-from fcm import get_fcm_token
-from widgets import ErrLabel, FieldLabel, PrimaryBtn, StyledInput, TopBar
+from widgets import ErrLabel, FieldLabel, PrimaryBtn, RatingStars, StyledInput, TopBar
 from theme import BG, TXT, TXT2
 
 
@@ -64,14 +63,22 @@ class ProfileScreen(Screen):
         self._email_display.bind(size=self._email_display.setter("text_size"))
         header.add_widget(self._email_display)
 
-        self._rating_display = Label(
-            text="",
-            color=(1, 1, 1, 0.85), font_size=sp(13),
-            size_hint_y=None, height=dp(22),
-            halign="center",
+        self._rating_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None, height=dp(24),
+            spacing=dp(6),
         )
-        self._rating_display.bind(size=self._rating_display.setter("text_size"))
-        header.add_widget(self._rating_display)
+        self._stars = RatingStars(rating=None, star_size=dp(15), height=dp(24))
+        self._rating_row.add_widget(self._stars)
+        self._review_count_lbl = Label(
+            text="",
+            color=(1, 1, 1, 0.75), font_size=sp(11),
+            size_hint=(None, 1), width=dp(64),
+            halign="left", valign="middle",
+            text_size=(dp(64), None),
+        )
+        self._rating_row.add_widget(self._review_count_lbl)
+        header.add_widget(self._rating_row)
 
         root.add_widget(header)
 
@@ -102,11 +109,6 @@ class ProfileScreen(Screen):
         self._save_btn.bind(on_press=self._save)
         content.add_widget(self._save_btn)
 
-        # Debug FCM button
-        self._fcm_btn = PrimaryBtn(text="Test FCM Registration")
-        self._fcm_btn.bind(on_press=self._test_fcm)
-        content.add_widget(self._fcm_btn)
-
         self._err = ErrLabel(text="")
         content.add_widget(self._err)
 
@@ -135,66 +137,14 @@ class ProfileScreen(Screen):
         self._email_display.text = data.get("email") or ""
         avg   = data.get("average_rating")
         count = data.get("review_count", 0)
-        if avg is not None:
-            self._rating_display.text = f"{avg} / 5  ({count} review{'s' if count != 1 else ''})"
-        else:
-            self._rating_display.text = "No reviews yet"
+        self._stars.set_rating(avg)
+        self._review_count_lbl.text = (
+            f"({count} review{'s' if count != 1 else ''})" if avg is not None else ""
+        )
         self._in_name.text     = data.get("name")     or ""
         self._in_bio.text      = data.get("bio")      or ""
         self._in_location.text = data.get("location") or ""
         self._in_phone.text    = data.get("phone")    or ""
-
-    def _test_fcm(self, *_):
-        print("DEBUG: _test_fcm called")
-        use_popup = False
-        try:
-            from kivy.uix.toast import toast
-        except ImportError:
-            try:
-                from kivy.toast import toast
-            except ImportError:
-                # Fallback: use popup
-                use_popup = True
-        
-        if use_popup:
-            from kivy.uix.popup import Popup
-            from kivy.uix.label import Label
-            popup = Popup(title="Testing FCM", content=Label(text="Testing FCM..."), size_hint=(0.8, 0.4))
-            popup.open()
-            print("DEBUG: Using popup for toast")
-        else:
-            toast("Testing FCM...")
-        
-        print("DEBUG: About to call get_fcm_token")
-        get_fcm_token(self._on_fcm_test_success, on_error=self._on_fcm_test_error)
-
-    def _on_fcm_test_success(self, token):
-        print(f"DEBUG: FCM test success with token: {token[:20]}...")
-        def show_msg():
-            try:
-                from kivy.uix.toast import toast
-            except ImportError:
-                try:
-                    from kivy.toast import toast
-                except ImportError:
-                    from kivy.uix.popup import Popup
-                    from kivy.uix.label import Label
-                    popup = Popup(title="FCM Success", content=Label(text=f"FCM test success: {token[:10]}..."), size_hint=(0.8, 0.4))
-                    popup.open()
-                    return
-            toast(f"FCM test success: {token[:10]}...")
-        
-        show_msg()
-
-    def _on_fcm_test_error(self, error):
-        print(f"DEBUG: FCM test error: {error}")
-        def show_msg():
-            from kivy.uix.popup import Popup
-            from kivy.uix.textinput import TextInput
-            ti = TextInput(text=error, readonly=True, multiline=True, font_size='12sp')
-            popup = Popup(title="FCM Error", content=ti, size_hint=(0.95, 0.75))
-            popup.open()
-        show_msg()
 
     def _save(self, *_):
         self._err.text = ""

@@ -39,6 +39,7 @@ from screens.profile import ProfileScreen
 from screens.settings import SettingsScreen
 from screens.feedback import FeedbackScreen
 from screens.rate_user import RateUserScreen
+from screens.notifications import NotificationsScreen
 
 def log_touch(window, touch):
     print("touch:", touch.pos, touch.device, touch.profile)
@@ -74,18 +75,53 @@ class HyperlocalApp(App):
         else:
             toast("App started!")
         
-        if IS_ANDROID and get_token():
-            logger.info("✓ On Android with auth token, setting up notifications...")
-            self._request_notification_permission()
-            get_fcm_token(self._on_fcm_token, on_error=self._on_fcm_error)
-        elif not IS_ANDROID:
-            logger.info("✗ Desktop mode - skipping FCM setup")
+        if IS_ANDROID:
+            self._create_notification_channel()
+            if get_token():
+                logger.info("✓ On Android with auth token, setting up notifications...")
+                self._request_notification_permission()
+                self._register_pending_token()
+                get_fcm_token(self._on_fcm_token, on_error=self._on_fcm_error)
+            else:
+                logger.info("✗ No auth token, skipping notification setup")
+            self._start_refresh_listener()
         else:
-            logger.info("✗ No auth token, skipping notification setup")
+            logger.info("✗ Desktop mode - skipping FCM setup")
         
         # Window.bind(on_touch_down=log_touch)
 
         return self._root
+
+    def _create_notification_channel(self):
+        try:
+            from jnius import autoclass
+            Build = autoclass('android.os.Build$VERSION')
+            if Build.SDK_INT >= 26:
+                context = autoclass('org.kivy.android.PythonActivity').mActivity
+                NotificationChannel = autoclass('android.app.NotificationChannel')
+                NotificationManager = autoclass('android.app.NotificationManager')
+                nm = context.getSystemService(NotificationManager.SERVICE)
+                ch = NotificationChannel(
+                    'hyperlocal_channel', 'Hyperlocal', NotificationManager.IMPORTANCE_HIGH
+                )
+                nm.createNotificationChannel(ch)
+                logger.info("✓ Notification channel created")
+        except Exception as e:
+            logger.warning(f"Could not create notification channel: {e}")
+
+    def _register_pending_token(self):
+        """Re-register FCM token if Firebase rotated it while app was closed."""
+        try:
+            from jnius import autoclass
+            context = autoclass('org.kivy.android.PythonActivity').mActivity
+            prefs = context.getSharedPreferences('hyperlocal_fcm', 0)
+            token = prefs.getString('pending_token', None)
+            if token:
+                logger.info(f"✓ Found pending FCM token, re-registering: {token[:20]}...")
+                register_fcm_token(token)
+                prefs.edit().remove('pending_token').apply()
+        except Exception as e:
+            logger.warning(f"Could not check pending FCM token: {e}")
 
     def _request_notification_permission(self):
         logger.info("Requesting POST_NOTIFICATIONS permission...")
@@ -97,22 +133,7 @@ class HyperlocalApp(App):
             logger.warning(f"Could not request notification permission (may not be on Android 13+): {e}")
 
     def _on_fcm_token(self, token):
-        print(f"DEBUG: _on_fcm_token called with token: {token[:20]}...")
-        logger.info(f"✓ FCM token callback received: {token[:20]}...")
-        def show_msg():
-            try:
-                from kivy.uix.toast import toast
-            except ImportError:
-                try:
-                    from kivy.toast import toast
-                except ImportError:
-                    from kivy.uix.popup import Popup
-                    from kivy.uix.label import Label
-                    popup = Popup(title="FCM Token", content=Label(text=f"FCM Token: {token[:10]}..."), size_hint=(0.8, 0.4))
-                    popup.open()
-                    return
-            toast(f"FCM Token: {token[:10]}...")
-        show_msg()
+        logger.info(f"✓ FCM token received: {token[:20]}...")
         register_fcm_token(token)
     
     def _on_fcm_error(self, error):
@@ -127,6 +148,35 @@ class HyperlocalApp(App):
             popup.open()
         show_msg()
 
+    def _start_refresh_listener(self):
+        try:
+            from jnius import autoclass
+            context = autoclass('org.kivy.android.PythonActivity').mActivity
+            prefs = context.getSharedPreferences('hyperlocal_fcm', 0)
+            self._last_refresh_counter = prefs.getInt('refresh_counter', 0)
+        except Exception:
+            self._last_refresh_counter = 0
+        Clock.schedule_interval(self._check_refresh_signal, 1)
+
+    def _check_refresh_signal(self, dt):
+        try:
+            from jnius import autoclass
+            context = autoclass('org.kivy.android.PythonActivity').mActivity
+            prefs = context.getSharedPreferences('hyperlocal_fcm', 0)
+            counter = prefs.getInt('refresh_counter', 0)
+            if counter != self._last_refresh_counter:
+                self._last_refresh_counter = counter
+                self._refresh_current_screen()
+        except Exception:
+            pass
+
+    def _refresh_current_screen(self):
+        current = self._sm.current
+        if current in ('task_list', 'my_tasks'):
+            screen = self._sm.get_screen(current)
+            if hasattr(screen, '_bg_refresh'):
+                screen._bg_refresh()
+
     def _build_sm(self, current=""):
         sm = ScreenManager(transition=NoTransition())
         sm.add_widget(LoginScreen())
@@ -138,6 +188,7 @@ class HyperlocalApp(App):
         sm.add_widget(SettingsScreen())
         sm.add_widget(FeedbackScreen())
         sm.add_widget(RateUserScreen())
+        sm.add_widget(NotificationsScreen())
         sm.current = current or ("task_list" if get_token() else "login")
         sm.transition = SlideTransition()
         return sm

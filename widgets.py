@@ -4,7 +4,7 @@ from datetime import datetime
 from kivy.animation import Animation
 from kivy.app import App
 from kivy.core.window import Window
-from kivy.graphics import Color, Line, Mesh, Rectangle, RoundedRectangle
+from kivy.graphics import Color, Ellipse, Line, Mesh, Rectangle, RoundedRectangle
 from kivy.metrics import dp, sp
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
@@ -140,10 +140,59 @@ class HamburgerBtn(ButtonBehavior, Widget):
         App.get_running_app().toggle_drawer()
 
 
+class BellBtn(ButtonBehavior, Widget):
+    """Canvas-drawn bell icon button for the TopBar."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.size_hint = (None, None)
+        self.size = (dp(44), dp(44))
+        self.bind(pos=self._draw, size=self._draw)
+
+    def _draw(self, *_):
+        self.canvas.after.clear()
+        cx, cy = self.center_x, self.center_y + dp(2)
+        rx, ry = dp(7), dp(5)
+        with self.canvas.after:
+            Color(*WHITE)
+
+            # Arc points: left-base → peak → right-base (13 points, ∩ shape)
+            arc = [
+                (cx - rx * math.cos(math.pi * i / 12),
+                 cy + ry * math.sin(math.pi * i / 12))
+                for i in range(13)
+            ]
+
+            # Filled dome — triangle fan from (cx, cy) to each arc segment
+            dome_verts = [cx, cy, 0, 0]
+            for px, py in arc:
+                dome_verts += [px, py, 0, 0]
+            dome_idx = []
+            for i in range(12):
+                dome_idx += [0, i + 1, i + 2]
+            Mesh(vertices=dome_verts, indices=dome_idx, mode='triangles')
+
+            # Filled body — trapezoid widening toward the rim
+            bx = dp(9)
+            body_verts = [
+                arc[0][0],  arc[0][1],  0, 0,   # top-left  (= cx-rx, cy)
+                arc[-1][0], arc[-1][1], 0, 0,   # top-right (= cx+rx, cy)
+                cx + bx,    cy - dp(8), 0, 0,   # bottom-right
+                cx - bx,    cy - dp(8), 0, 0,   # bottom-left
+            ]
+            Mesh(vertices=body_verts, indices=[0, 1, 2, 0, 2, 3], mode='triangles')
+
+            # Filled rim bar
+            Rectangle(pos=(cx - dp(11), cy - dp(10)), size=(dp(22), dp(3)))
+
+            # Clapper
+            Ellipse(pos=(cx - dp(2), cy - dp(14)), size=(dp(4), dp(4)))
+
+
 class TopBar(BoxLayout):
     """Blue app bar. Hamburger on left; back arrow on left for sub-screens."""
 
-    def __init__(self, title="", on_back=None, show_menu=True, **kw):
+    def __init__(self, title="", on_back=None, show_menu=True, on_bell=None, **kw):
         super().__init__(**kw)
         self.orientation = "horizontal"
         self.size_hint_y = None
@@ -174,8 +223,12 @@ class TopBar(BoxLayout):
         lbl.bind(size=lbl.setter("text_size"))
         self.add_widget(lbl)
 
-        # Sub-screens still get a hamburger on the right
-        if show_menu and on_back:
+        # Right side: bell (main screens) or hamburger (sub-screens)
+        if on_bell:
+            bell = BellBtn()
+            bell.bind(on_press=lambda *_: on_bell())
+            self.add_widget(bell)
+        elif show_menu and on_back:
             self.add_widget(HamburgerBtn())
 
     def _sync(self, *_):
@@ -368,6 +421,82 @@ class ErrLabel(Label):
         kw.setdefault("halign", "left")
         super().__init__(**kw)
         self.bind(size=self.setter("text_size"))
+
+
+_STAR_YELLOW = (1.0, 0.80, 0.0, 1)
+_STAR_EMPTY  = (0.70, 0.70, 0.70, 1)
+
+
+class RatingStars(BoxLayout):
+    """Read-only star rating row.
+
+    Stars are drawn directly in canvas.before (no child widgets per star),
+    so there is exactly one canvas scope and one colour reset.
+    canvas.after holds a permanent Color(1,1,1,1) that always fires last,
+    guaranteeing the yellow star colour never bleeds into subsequent widgets.
+    """
+
+    def __init__(self, rating=None, star_size=dp(14), **kw):
+        kw.setdefault("orientation", "horizontal")
+        kw.setdefault("size_hint_y", None)
+        kw.setdefault("height",      star_size + dp(4))
+        super().__init__(**kw)
+        self._rating    = rating
+        self._star_size = star_size
+        # Permanent reset — locked in once, survives set_rating() calls.
+        with self.canvas.after:
+            Color(1, 1, 1, 1)
+        self.bind(pos=self._draw_stars, size=self._draw_stars)
+        self._apply(rating)
+
+    def set_rating(self, rating):
+        self._rating = rating
+        self.clear_widgets()
+        self._apply(rating)
+
+    def _apply(self, rating):
+        self.canvas.before.clear()
+        if rating is None:
+            lbl = Label(
+                text="No rating yet",
+                color=TXT2, font_size=sp(11),
+                halign="left", valign="middle",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            self.add_widget(lbl)
+        else:
+            self._draw_stars()
+
+    def _draw_stars(self, *_):
+        self.canvas.before.clear()
+        if self._rating is None:
+            return
+        filled = round(self._rating)
+        ss, gap = self._star_size, dp(2)
+        with self.canvas.before:
+            for i in range(5):
+                cx    = self.x + ss * 0.5 + i * (ss + gap)
+                cy    = self.center_y
+                r_out = ss * 0.44
+                r_in  = r_out * 0.40
+                pts, mesh = [], []
+                for j in range(10):
+                    a = math.pi / 2 - j * math.pi / 5
+                    r = r_out if j % 2 == 0 else r_in
+                    x = cx + r * math.cos(a)
+                    y = cy + r * math.sin(a)
+                    pts  += [x, y]
+                    mesh += [x, y, 0, 0]
+                if i < filled:
+                    Color(*_STAR_YELLOW)
+                    verts = [cx, cy, 0, 0] + mesh
+                    idxs  = []
+                    for k in range(10):
+                        idxs += [0, k + 1, (k + 1) % 10 + 1]
+                    Mesh(vertices=verts, indices=idxs, mode="triangles")
+                else:
+                    Color(*_STAR_EMPTY)
+                    Line(points=pts, width=1.0, close=True)
 
 
 class StarWidget(ButtonBehavior, Widget):
@@ -690,22 +819,20 @@ class TaskCard(ButtonBehavior, BoxLayout):
             type_row.add_widget(TypeBadge(task_type=task_type))
             self.add_widget(type_row)
 
-        # Bottom row — person name (left)  +  timestamp (right)
-        def _rating_str(val):
-            return f"  {val}/5" if val is not None else ""
-
+        # Bottom rows — person name + timestamp, then star rating
         if active_tab == "posted":
             if task.get("accepted_by"):
-                person = task.get("acceptor_name") or str(task["accepted_by"])
-                by_text = f"Taken By: {person}{_rating_str(task.get('acceptor_rating'))}"
+                person_name   = f"Taken By: {task.get('acceptor_name') or str(task['accepted_by'])}"
+                person_rating = task.get("acceptor_rating")
             else:
-                by_text = ""
+                person_name   = None
+                person_rating = None
         elif active_tab == "taken":
-            creator = task.get("creator_name") or str(task.get("created_by", ""))
-            by_text = f"Posted By: {creator}{_rating_str(task.get('creator_rating'))}"
+            person_name   = f"Posted By: {task.get('creator_name') or str(task.get('created_by', ''))}"
+            person_rating = task.get("creator_rating")
         else:
-            creator = task.get("creator_name") or str(task.get("created_by", ""))
-            by_text = f"Posted By: {creator}{_rating_str(task.get('creator_rating'))}"
+            person_name   = f"Posted By: {task.get('creator_name') or str(task.get('created_by', ''))}"
+            person_rating = task.get("creator_rating")
 
         status = task.get("status", "open")
         ts_raw = (
@@ -713,15 +840,16 @@ class TaskCard(ButtonBehavior, BoxLayout):
         ) or task.get("created_at", "")
         ts = _fmt_dt(ts_raw)
 
-        # Bottom row — person name (left) + timestamp (right)
-        if by_text or ts:
-            bottom_row = BoxLayout(size_hint_y=None, height=dp(18))
+        if person_name or ts:
+            name_row = BoxLayout(size_hint_y=None, height=dp(18))
+            # Always add the name label — when empty it acts as a spacer
+            # that keeps the timestamp pinned to the right edge.
             by_lbl = Label(
-                text=by_text, color=TXT2, font_size=sp(10),
+                text=person_name or "", color=TXT2, font_size=sp(10),
                 halign="left", valign="middle",
             )
             by_lbl.bind(size=by_lbl.setter("text_size"))
-            bottom_row.add_widget(by_lbl)
+            name_row.add_widget(by_lbl)
             if ts:
                 ts_lbl = Label(
                     text=ts, color=TXT2, font_size=sp(10),
@@ -729,8 +857,11 @@ class TaskCard(ButtonBehavior, BoxLayout):
                     halign="right", valign="middle",
                     text_size=(dp(90), None),
                 )
-                bottom_row.add_widget(ts_lbl)
-            self.add_widget(bottom_row)
+                name_row.add_widget(ts_lbl)
+            self.add_widget(name_row)
+
+        if person_name is not None:
+            self.add_widget(RatingStars(rating=person_rating, star_size=dp(11)))
 
     def on_press(self):
         Animation(opacity=0.82, duration=0.07).start(self)

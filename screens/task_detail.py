@@ -9,7 +9,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
 from api import api, get_user_id
-from widgets import DangerBtn, ErrLabel, FieldLabel, OutlineBtn, PrimaryBtn, StatusBadge, TopBar
+from widgets import DangerBtn, ErrLabel, FieldLabel, OutlineBtn, PrimaryBtn, RatingStars, StatusBadge, TopBar
 from theme import BG, ERROR, PRIMARY, SUCCESS, TXT, TXT2, WHITE
 
 
@@ -65,6 +65,11 @@ class TaskDetailScreen(Screen):
         )
         self._root.add_widget(self._rate_bar)
         self.add_widget(self._root)
+
+    def on_pre_enter(self):
+        self._body.clear_widgets()
+        self._rate_bar.clear_widgets()
+        self._rate_bar.height = 0
 
     def on_enter(self):
         self._load()
@@ -142,6 +147,23 @@ class TaskDetailScreen(Screen):
         return d
 
     @staticmethod
+    def _stars_row(rating):
+        """A row of stars indented to sit under the value column of an info row."""
+        _LBL_W = dp(130)
+        _GAP   = dp(8)
+        _VAL_W = dp(162)
+        row = BoxLayout(
+            orientation="horizontal",
+            size_hint=(None, None),
+            width=_LBL_W + _GAP + _VAL_W,
+            height=dp(20),
+            spacing=_GAP,
+        )
+        row.add_widget(Widget(size_hint=(None, None), width=_LBL_W, height=dp(20)))
+        row.add_widget(RatingStars(rating=rating, star_size=dp(12), height=dp(20)))
+        return row
+
+    @staticmethod
     def _info_row(label, value, val_color=None):
         _ROW_H = dp(28)
         _LBL_W = dp(130)
@@ -180,12 +202,17 @@ class TaskDetailScreen(Screen):
         self._task = task
         b = self._body
         b.clear_widgets()
+        self._rate_bar.clear_widgets()
+        self._rate_bar.height = 0
 
         task_type    = task.get("task_type", "request")
         task_status  = task.get("status", "")
         display_status = "deleted" if task.get("hidden_from_creator") else task_status
+        uid     = get_user_id()
         reward  = task.get("reward")
-        creator = task.get("creator_name") or str(task.get("created_by", ""))
+        creator = "You" if task.get("created_by") == uid else (
+            task.get("creator_name") or str(task.get("created_by", ""))
+        )
 
         # ── Structured detail card ─────────────────────────────────────────
         card = self._section_card(spacing=dp(0), padding=[dp(14), dp(14)])
@@ -233,26 +260,6 @@ class TaskDetailScreen(Screen):
         card.add_widget(self._divider())
         card.add_widget(Widget(size_hint_y=None, height=dp(12)))
 
-        info_items = []
-        type_color = ERROR if task_type == "offer" else SUCCESS
-        info_items.append(("Type", "Offer" if task_type == "offer" else "Request", type_color))
-        if reward is not None:
-            price_label  = "Price Charged" if task_type == "offer" else "Price Offered"
-            reward_color = ERROR if task_type == "offer" else SUCCESS
-            info_items.append((price_label, f"₹{reward:g}", reward_color))
-        info_items.append(("Posted by", creator, TXT))
-        if task.get("accepted_by"):
-            acc = task.get("acceptor_name") or str(task["accepted_by"])
-            info_items.append(("Accepted by", acc, TXT))
-        if task.get("created_at"):
-            info_items.append(("Posted on", self._fmt_time(task["created_at"]), TXT2))
-        if task_status == "accepted" and task.get("updated_at"):
-            info_items.append(("Accepted on", self._fmt_time(task["updated_at"]), TXT2))
-        elif task_status == "completed" and task.get("updated_at"):
-            info_items.append(("Completed on", self._fmt_time(task["updated_at"]), SUCCESS))
-        elif task_status == "aborted" and task.get("updated_at"):
-            info_items.append(("Aborted on", self._fmt_time(task["updated_at"]), ERROR))
-
         h_scroll = ScrollView(
             do_scroll_x=True, do_scroll_y=False,
             size_hint=(1, None), height=dp(28),
@@ -269,8 +276,35 @@ class TaskDetailScreen(Screen):
         )
         info_col.bind(minimum_height=info_col.setter("height"))
         info_col.bind(height=lambda _, h: setattr(h_scroll, "height", h + dp(4)))
-        for lbl_txt, val_txt, col in info_items:
-            info_col.add_widget(self._info_row(lbl_txt, val_txt, col))
+
+        type_color = ERROR if task_type == "offer" else SUCCESS
+        info_col.add_widget(self._info_row(
+            "Type", "Offer" if task_type == "offer" else "Request", type_color))
+        if reward is not None:
+            price_label  = "Price Charged" if task_type == "offer" else "Price Offered"
+            reward_color = ERROR if task_type == "offer" else SUCCESS
+            info_col.add_widget(self._info_row(price_label, f"₹{reward:g}", reward_color))
+        info_col.add_widget(self._info_row("Posted by", creator, TXT))
+        info_col.add_widget(self._stars_row(task.get("creator_rating")))
+        if task.get("accepted_by"):
+            acc = "You" if task.get("accepted_by") == uid else (
+                task.get("acceptor_name") or str(task["accepted_by"])
+            )
+            info_col.add_widget(self._info_row("Accepted by", acc, TXT))
+            info_col.add_widget(self._stars_row(task.get("acceptor_rating")))
+        if task.get("created_at"):
+            info_col.add_widget(self._info_row(
+                "Posted on", self._fmt_time(task["created_at"]), TXT2))
+        if task_status == "accepted" and task.get("updated_at"):
+            info_col.add_widget(self._info_row(
+                "Accepted on", self._fmt_time(task["updated_at"]), TXT2))
+        elif task_status == "completed" and task.get("updated_at"):
+            info_col.add_widget(self._info_row(
+                "Completed on", self._fmt_time(task["updated_at"]), SUCCESS))
+        elif task_status == "aborted" and task.get("updated_at"):
+            info_col.add_widget(self._info_row(
+                "Aborted on", self._fmt_time(task["updated_at"]), ERROR))
+
         h_scroll.add_widget(info_col)
         card.add_widget(h_scroll)
 
@@ -345,9 +379,9 @@ class TaskDetailScreen(Screen):
 
         if is_creator and task_status == "aborted":
             b.add_widget(Widget(size_hint_y=None, height=dp(8)))
-            btn = PrimaryBtn(text="Repost as New Task")
-            btn.bind(on_press=self._repost)
-            b.add_widget(btn)
+            self._repost_btn = PrimaryBtn(text="Repost as New Task")
+            self._repost_btn.bind(on_press=self._repost)
+            b.add_widget(self._repost_btn)
 
         if is_creator and task_status not in ("completed", "aborted"):
             rem = DangerBtn(text="Remove Task")
@@ -411,12 +445,27 @@ class TaskDetailScreen(Screen):
             self._abort_err.text = str(error)
 
     def _repost(self, *_):
+        self._repost_btn.disabled = True
         api("POST", f"/tasks/{self.task_id}/repost",
-            on_success=self._reposted, on_error=self._action_err_cb)
+            on_success=self._reposted, on_error=self._repost_err)
 
-    def _reposted(self, new_task):
-        self.task_id = new_task["id"]
-        self._render(new_task)
+    def _reposted(self, _new_task):
+        btn = self._repost_btn
+        if btn.parent:
+            parent = btn.parent
+            idx = parent.children.index(btn)
+            parent.remove_widget(btn)
+            lbl = Label(
+                text="Reposted!", color=SUCCESS, font_size=sp(14), bold=True,
+                size_hint_y=None, height=dp(44),
+                halign="center",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            parent.add_widget(lbl, index=idx)
+
+    def _repost_err(self, error):
+        self._repost_btn.disabled = False
+        self._action_err_cb(error)
 
     def _remove(self, *_):
         api("DELETE", f"/tasks/{self.task_id}",

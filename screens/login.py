@@ -51,6 +51,7 @@ class LoginScreen(Screen):
         kw.setdefault("name", "login")
         super().__init__(**kw)
         self._server = None
+        self._waiting = False
         self._build()
 
     def _build(self):
@@ -112,6 +113,10 @@ class LoginScreen(Screen):
         self.add_widget(root)
 
     def _start_oauth(self, *_):
+        if self._waiting:
+            self._cancel_oauth()
+            return
+        self._waiting = True
         self._btn.text = "Opening browser…"
         self._btn.disabled = True
         self._err.text = ""
@@ -125,7 +130,16 @@ class LoginScreen(Screen):
             return
         self._start_local_server()
         webbrowser.open(url)
-        self._btn.text = "Waiting for Google…"
+        self._btn.text = "Cancel Login"
+        self._btn.disabled = False
+
+    def _cancel_oauth(self):
+        if self._server:
+            threading.Thread(target=self._server.shutdown, daemon=True).start()
+            self._server = None
+        self._waiting = False
+        self._btn.text = "Continue with Google"
+        self._btn.disabled = False
 
     def _start_local_server(self):
         _CallbackHandler.callback = self._oauth_done
@@ -133,21 +147,24 @@ class LoginScreen(Screen):
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
     def _oauth_done(self, token, user_id):
+        self._waiting = False
         if self._server:
             threading.Thread(target=self._server.shutdown, daemon=True).start()
             self._server = None
         save_auth(token, user_id)
-        self._btn.text = "Login with Google"
+        self._btn.text = "Continue with Google"
         self._btn.disabled = False
-        get_fcm_token(register_fcm_token)
+        Clock.schedule_once(lambda dt: get_fcm_token(register_fcm_token), 0)
         self.manager.current = "task_list"
 
     def _on_err(self, error):
+        self._waiting = False
         self._err.text = str(error)
-        self._btn.text = "Login with Google"
+        self._btn.text = "Continue with Google"
         self._btn.disabled = False
 
     def on_leave(self):
         if self._server:
             threading.Thread(target=self._server.shutdown, daemon=True).start()
             self._server = None
+        self._waiting = False
